@@ -22,7 +22,17 @@ Tab Audio → VAD (speech pause detection) → Moonshine ASR → OPUS-MT Transla
   ~400ms silence detection    ~50ms inference     ~100ms translation      ~650ms total
 ```
 
+## Two Ways to Use
+
+### Option 1: Chrome Extension (Desktop)
+Best for Google Meet, Zoom, and other browser-based calls. Captures audio directly from the tab.
+
+### Option 2: PWA Web App (Phone / Any Device)
+Works with **any** call app (Zoom, WhatsApp, FaceTime, regular phone calls). Put the call on speaker — the app listens through your microphone.
+
 ## Installation
+
+### Chrome Extension
 
 1. Clone and build:
    ```bash
@@ -38,8 +48,23 @@ Tab Audio → VAD (speech pause detection) → Moonshine ASR → OPUS-MT Transla
    - Click **Load unpacked**
    - Select the `dist/` folder
 
+### PWA (Phone / Tablet / Any Browser)
+
+1. Host the `pwa/` folder on any static server (GitHub Pages, Netlify, Vercel, or local):
+   ```bash
+   cd pwa
+   npx serve .
+   ```
+
+2. Open the URL on your phone's browser
+
+3. Tap "Add to Home Screen" to install as an app
+
+4. Put your call on speaker and tap **Start Listening**
+
 ## Usage
 
+### Chrome Extension
 1. Open a call on Google Meet, Zoom, WhatsApp Web, Teams, or Webex
 2. Click the **Live Transcribe** extension icon
 3. Click **Start Transcription**

@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="manifest.json">
+  <title>Live Transcribe</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .header {
+      background: linear-gradient(135deg, #1e40af, #7c3aed);
+      padding: 16px 20px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+
+    .header h1 { font-size: 20px; color: white; }
+    .header p { font-size: 12px; color: rgba(255,255,255,0.7); margin-top: 2px; }
+
+    .controls {
+      padding: 16px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .btn {
+      width: 100%;
+      padding: 16px;
+      border: none;
+      border-radius: 14px;
+      font-size: 17px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      transition: all 0.2s;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .btn-start {
+      background: linear-gradient(135deg, #22c55e, #16a34a);
+      color: white;
+    }
+
+    .btn-stop {
+      background: linear-gradient(135deg, #ef4444, #dc2626);
+      color: white;
+      animation: pulse-border 2s infinite;
+    }
+
+    @keyframes pulse-border {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+      50% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+    }
+
+    .btn:disabled { opacity: 0.5; }
+
+    .btn:active:not(:disabled) { transform: scale(0.97); }
+
+    .settings-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .settings-row select {
+      flex: 1;
+      padding: 10px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      color: #e2e8f0;
+      font-size: 13px;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 8px;
+      font-size: 13px;
+      color: #94a3b8;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #64748b;
+    }
+
+    .status-dot.active {
+      background: #22c55e;
+      animation: blink 1.5s infinite;
+    }
+
+    .status-dot.loading {
+      background: #eab308;
+      animation: blink 0.8s infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    .progress {
+      width: 100%;
+      height: 3px;
+      background: #1e293b;
+      border-radius: 2px;
+      overflow: hidden;
+      display: none;
+    }
+
+    .progress.visible { display: block; }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #7c3aed, #2563eb);
+      width: 0%;
+      transition: width 0.3s;
+    }
+
+    /* Transcript area - fills remaining space */
+    .transcript {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      scroll-behavior: smooth;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .transcript-empty {
+      text-align: center;
+      color: rgba(255,255,255,0.2);
+      font-size: 15px;
+      padding-top: 40px;
+    }
+
+    .transcript-line {
+      padding: 10px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      animation: fade-in 0.3s ease;
+    }
+
+    @keyframes fade-in {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .transcript-original {
+      font-size: 13px;
+      color: rgba(255,255,255,0.4);
+      direction: ltr;
+      text-align: left;
+      line-height: 1.4;
+    }
+
+    .transcript-translation {
+      font-size: 18px;
+      font-weight: 500;
+      color: rgba(255,255,255,0.95);
+      direction: rtl;
+      text-align: right;
+      line-height: 1.5;
+      margin-top: 4px;
+    }
+
+    .transcript-line.partial .transcript-original {
+      font-style: italic;
+      color: rgba(255,255,255,0.3);
+    }
+
+    .footer {
+      padding: 8px;
+      text-align: center;
+      font-size: 10px;
+      color: #334155;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Live Transcribe</h1>
+    <p>English → Hebrew | 100% local</p>
+  </div>
+
+  <div class="controls">
+    <div class="status">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">Ready - tap to start</span>
+    </div>
+
+    <div class="progress" id="progress">
+      <div class="progress-fill" id="progressFill"></div>
+    </div>
+
+    <button class="btn btn-start" id="mainBtn" onclick="toggleTranscription()">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+        <line x1="12" y1="19" x2="12" y2="23"/>
+        <line x1="8" y1="23" x2="16" y2="23"/>
+      </svg>
+      Start Listening
+    </button>
+
+    <div class="settings-row">
+      <select id="modelSelect">
+        <option value="onnx-community/moonshine-tiny-ONNX">Moonshine Tiny (fast)</option>
+        <option value="onnx-community/moonshine-base-ONNX">Moonshine Base (accurate)</option>
+        <option value="onnx-community/whisper-tiny.en">Whisper Tiny</option>
+      </select>
+      <select id="targetLang">
+        <option value="he" selected>עברית</option>
+        <option value="ar">العربية</option>
+        <option value="es">Español</option>
+        <option value="fr">Français</option>
+        <option value="de">Deutsch</option>
+        <option value="ru">Русский</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="transcript" id="transcript">
+    <div class="transcript-empty" id="emptyState">
+      Put your call on speaker<br>and tap Start Listening
+    </div>
+  </div>
+
+  <div class="footer">No data leaves your device</div>
+
+  <script type="module">
+    import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.4.0';
+
+    env.allowLocalModels = false;
+    env.useBrowserCache = true;
+
+    // State
+    let isRunning = false;
+    let transcriber = null;
+    let translator = null;
+    let audioContext = null;
+    let mediaStream = null;
+    let processor = null;
+
+    // VAD state
+    const SAMPLE_RATE = 16000;
+    const VAD_FRAME_SAMPLES = 480; // 30ms at 16kHz
+    const SPEECH_THRESHOLD = 0.015;
+    const SILENCE_MS = 400;
+    const MIN_SPEECH_MS = 300;
+    const MAX_CHUNK_MS = 6000;
+    const MIN_CHUNK_MS = 500;
+
+    let speechBuffer = [];
+    let silenceFrames = 0;
+    let speechFrames = 0;
+    let isSpeaking = false;
+    let chunkStart = 0;
+    let workerBusy = false;
+    let pendingAudio = null;
+
+    // DOM
+    const mainBtn = document.getElementById('mainBtn');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const progress = document.getElementById('progress');
+    const progressFill = document.getElementById('progressFill');
+    const transcript = document.getElementById('transcript');
+    const emptyState = document.getElementById('emptyState');
+    const modelSelect = document.getElementById('modelSelect');
+    const targetLang = document.getElementById('targetLang');
+
+    // Translation models
+    const TRANS_MODELS = {
+      he: 'Xenova/opus-mt-en-he',
+      ar: 'Xenova/opus-mt-en-ar',
+      es: 'Xenova/opus-mt-en-es',
+      fr: 'Xenova/opus-mt-en-fr',
+      de: 'Xenova/opus-mt-en-de',
+      ru: 'Xenova/opus-mt-en-ru',
+    };
+
+    window.toggleTranscription = async function() {
+      if (isRunning) {
+        stop();
+      } else {
+        await start();
+      }
+    };
+
+    async function start() {
+      mainBtn.disabled = true;
+      setStatus('loading', 'Loading models...');
+
+      try {
+        // Load ASR model
+        if (!transcriber) {
+          const modelId = modelSelect.value;
+          setStatus('loading', 'Downloading ASR model...');
+
+          let device = 'wasm';
+          try {
+            if (navigator.gpu) {
+              const adapter = await navigator.gpu.requestAdapter();
+              if (adapter) device = 'webgpu';
+            }
+          } catch {}
+
+          transcriber = await pipeline('automatic-speech-recognition', modelId, {
+            device,
+            dtype: device === 'webgpu' ? 'fp32' : 'q8',
+            progress_callback: (p) => {
+              if (p.status === 'progress') {
+                progress.classList.add('visible');
+                progressFill.style.width = `${p.progress}%`;
+                setStatus('loading', `Downloading ASR... ${Math.round(p.progress)}%`);
+              }
+            },
+          });
+        }
+
+        // Load translation model
+        const lang = targetLang.value;
+        if (!translator && TRANS_MODELS[lang]) {
+          setStatus('loading', 'Downloading translation model...');
+          translator = await pipeline('translation', TRANS_MODELS[lang], {
+            device: 'wasm',
+            dtype: 'q8',
+            progress_callback: (p) => {
+              if (p.status === 'progress') {
+                progressFill.style.width = `${p.progress}%`;
+                setStatus('loading', `Downloading translation... ${Math.round(p.progress)}%`);
+              }
+            },
+          });
+        }
+
+        progress.classList.remove('visible');
+
+        // Request microphone
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: true,
+            autoGainControl: true,
+            sampleRate: SAMPLE_RATE,
+          },
+        });
+
+        // Set up audio processing
+        audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+        const source = audioContext.createMediaStreamSource(mediaStream);
+        const bufferSize = 4096;
+        processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
+
+        processor.onaudioprocess = (e) => {
+          if (!isRunning) return;
+          const data = new Float32Array(e.inputBuffer.getChannelData(0));
+          for (let i = 0; i < data.length; i += VAD_FRAME_SAMPLES) {
+            const end = Math.min(i + VAD_FRAME_SAMPLES, data.length);
+            const frame = data.slice(i, end);
+            if (frame.length >= VAD_FRAME_SAMPLES * 0.5) processFrame(frame);
+          }
+        };
+
+        source.connect(processor);
+        processor.connect(audioContext.destination);
+
+        isRunning = true;
+        resetVAD();
+        modelSelect.disabled = true;
+        targetLang.disabled = true;
+
+        mainBtn.disabled = false;
+        mainBtn.className = 'btn btn-stop';
+        mainBtn.innerHTML = `
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="6" y="6" width="12" height="12" rx="2"/>
+          </svg>
+          Stop Listening
+        `;
+        setStatus('active', 'Listening...');
+
+      } catch (err) {
+        setStatus('error', err.message);
+        mainBtn.disabled = false;
+      }
+    }
+
+    function stop() {
+      isRunning = false;
+      flushBuffer();
+
+      if (processor) { processor.disconnect(); processor = null; }
+      if (audioContext) { audioContext.close(); audioContext = null; }
+      if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+
+      resetVAD();
+      modelSelect.disabled = false;
+      targetLang.disabled = false;
+
+      mainBtn.className = 'btn btn-start';
+      mainBtn.innerHTML = `
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="23"/>
+          <line x1="8" y1="23" x2="16" y2="23"/>
+        </svg>
+        Start Listening
+      `;
+      setStatus('idle', 'Stopped');
+    }
+
+    function frameEnergy(frame) {
+      let sum = 0;
+      for (let i = 0; i < frame.length; i++) sum += frame[i] * frame[i];
+      return Math.sqrt(sum / frame.length);
+    }
+
+    function processFrame(frame) {
+      const energy = frameEnergy(frame);
+      const isSpeechFrame = energy > SPEECH_THRESHOLD;
+
+      if (isSpeechFrame) {
+        silenceFrames = 0;
+        speechFrames++;
+        if (!isSpeaking && speechFrames >= 3) {
+          isSpeaking = true;
+          chunkStart = Date.now();
+        }
+      } else {
+        speechFrames = 0;
+        if (isSpeaking) silenceFrames++;
+      }
+
+      if (isSpeaking || speechFrames > 0) {
+        speechBuffer.push(new Float32Array(frame));
+      }
+
+      const elapsed = Date.now() - chunkStart;
+      const silenceMs = silenceFrames * 30;
+
+      if (isSpeaking) {
+        if ((silenceMs >= SILENCE_MS && elapsed >= MIN_CHUNK_MS) || elapsed >= MAX_CHUNK_MS) {
+          flushBuffer();
+        }
+      }
+    }
+
+    function resetVAD() {
+      speechBuffer = [];
+      silenceFrames = 0;
+      speechFrames = 0;
+      isSpeaking = false;
+      chunkStart = 0;
+    }
+
+    function flushBuffer() {
+      if (speechBuffer.length === 0) return;
+      const total = speechBuffer.reduce((s, b) => s + b.length, 0);
+      if ((total / SAMPLE_RATE) * 1000 < MIN_SPEECH_MS) { resetVAD(); return; }
+
+      const combined = new Float32Array(total);
+      let off = 0;
+      for (const b of speechBuffer) { combined.set(b, off); off += b.length; }
+
+      if (workerBusy) {
+        pendingAudio = combined;
+      } else {
+        runInference(combined);
+      }
+      resetVAD();
+    }
+
+    async function runInference(audio) {
+      if (!transcriber) return;
+      workerBusy = true;
+
+      try {
+        const t0 = performance.now();
+        const result = await transcriber(audio, { return_timestamps: false });
+        const ms = Math.round(performance.now() - t0);
+
+        if (result && result.text && result.text.trim()) {
+          const text = result.text.trim();
+          addLine(text, null, ms);
+
+          // Translate
+          if (translator) {
+            const t1 = performance.now();
+            const trans = await translator(text, { max_length: 512 });
+            const transMs = Math.round(performance.now() - t1);
+            if (trans && trans[0] && trans[0].translation_text) {
+              updateLastTranslation(trans[0].translation_text.trim(), ms + transMs);
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Inference error:', err);
+      }
+
+      workerBusy = false;
+      if (pendingAudio) {
+        const next = pendingAudio;
+        pendingAudio = null;
+        runInference(next);
+      }
+    }
+
+    function addLine(original, translation, ms) {
+      if (emptyState) emptyState.remove();
+
+      const div = document.createElement('div');
+      div.className = 'transcript-line';
+      div.innerHTML = `
+        <div class="transcript-original">${escapeHtml(original)} <span style="color:#475569;font-size:11px">${ms}ms</span></div>
+        ${translation ? `<div class="transcript-translation">${escapeHtml(translation)}</div>` : ''}
+      `;
+      div.dataset.original = original;
+      transcript.appendChild(div);
+      transcript.scrollTop = transcript.scrollHeight;
+    }
+
+    function updateLastTranslation(translation, totalMs) {
+      const lines = transcript.querySelectorAll('.transcript-line');
+      if (lines.length === 0) return;
+      const last = lines[lines.length - 1];
+
+      let transDiv = last.querySelector('.transcript-translation');
+      if (!transDiv) {
+        transDiv = document.createElement('div');
+        transDiv.className = 'transcript-translation';
+        last.appendChild(transDiv);
+      }
+      transDiv.textContent = translation;
+
+      // Update timing
+      const origDiv = last.querySelector('.transcript-original span');
+      if (origDiv) origDiv.textContent = `${totalMs}ms`;
+
+      transcript.scrollTop = transcript.scrollHeight;
+    }
+
+    function escapeHtml(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    function setStatus(state, text) {
+      statusDot.className = 'status-dot';
+      if (state === 'active') statusDot.classList.add('active');
+      if (state === 'loading') statusDot.classList.add('loading');
+      statusText.textContent = text;
+    }
+
+    // Register service worker for PWA
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    }
+  </script>
+</body>
+</html>
