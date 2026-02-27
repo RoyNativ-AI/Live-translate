@@ -1,18 +1,30 @@
-// Offscreen document - captures tab audio and processes it into chunks for Whisper
+// Offscreen document - captures tab audio with VAD-based chunking for low latency
 
 const SAMPLE_RATE = 16000; // Whisper expects 16kHz audio
-const CHUNK_DURATION = 5; // Process 5-second chunks
-const CHUNK_OVERLAP = 0.5; // 0.5 second overlap between chunks
-const SILENCE_THRESHOLD = 0.01; // RMS threshold for silence detection
-const MIN_AUDIO_DURATION = 1.0; // Minimum seconds of non-silent audio to process
+
+// VAD (Voice Activity Detection) configuration
+const VAD_FRAME_MS = 30; // Analyze audio in 30ms frames
+const VAD_FRAME_SAMPLES = Math.floor(SAMPLE_RATE * VAD_FRAME_MS / 1000);
+const SPEECH_THRESHOLD = 0.015; // RMS threshold to detect speech
+const SILENCE_DURATION_MS = 600; // Send chunk after 600ms of silence (speech pause)
+const MIN_SPEECH_MS = 500; // Minimum speech duration to process
+const MAX_CHUNK_MS = 8000; // Force-send chunk after 8 seconds max
+const MIN_CHUNK_MS = 1000; // Minimum chunk duration to send
 
 let mediaStream = null;
 let audioContext = null;
 let processor = null;
 let worker = null;
-let audioBuffer = [];
 let isCapturing = false;
-let processingTimer = null;
+let isWorkerBusy = false;
+let pendingChunk = null;
+
+// VAD state
+let speechBuffer = []; // Accumulated speech audio frames
+let silenceFrameCount = 0; // Consecutive silent frames
+let speechFrameCount = 0; // Consecutive speech frames
+let isSpeaking = false; // Currently detecting speech
+let chunkStartTime = 0; // When current chunk started
 
 // Initialize the Whisper web worker
 function initWorker() {
@@ -41,6 +53,7 @@ function initWorker() {
         break;
 
       case 'result':
+        isWorkerBusy = false;
         if (data.text && data.text.trim()) {
           chrome.runtime.sendMessage({
             type: 'transcription-result',
@@ -50,6 +63,12 @@ function initWorker() {
             isFinal: true,
             language: data.language,
           });
+        }
+        // Process pending chunk if any
+        if (pendingChunk) {
+          const chunk = pendingChunk;
+          pendingChunk = null;
+          sendToWorker(chunk);
         }
         break;
 
@@ -65,7 +84,14 @@ function initWorker() {
         break;
 
       case 'error':
+        isWorkerBusy = false;
         console.error('[Offscreen] Worker error:', data.message);
+        // Process pending chunk if any
+        if (pendingChunk) {
+          const chunk = pendingChunk;
+          pendingChunk = null;
+          sendToWorker(chunk);
+        }
         break;
     }
   };
@@ -85,13 +111,114 @@ function initWorker() {
   );
 }
 
-// Calculate RMS (root mean square) of audio data for silence detection
-function calculateRMS(audioData) {
+// Calculate RMS energy for a frame of audio
+function frameEnergy(frame) {
   let sum = 0;
-  for (let i = 0; i < audioData.length; i++) {
-    sum += audioData[i] * audioData[i];
+  for (let i = 0; i < frame.length; i++) {
+    sum += frame[i] * frame[i];
   }
-  return Math.sqrt(sum / audioData.length);
+  return Math.sqrt(sum / frame.length);
+}
+
+// Process a single audio frame through VAD
+function processVADFrame(frame) {
+  const energy = frameEnergy(frame);
+  const isSpeechFrame = energy > SPEECH_THRESHOLD;
+
+  if (isSpeechFrame) {
+    silenceFrameCount = 0;
+    speechFrameCount++;
+
+    if (!isSpeaking && speechFrameCount >= 3) {
+      // Speech started (need 3 consecutive frames ~90ms to confirm)
+      isSpeaking = true;
+      chunkStartTime = Date.now();
+    }
+  } else {
+    speechFrameCount = 0;
+    if (isSpeaking) {
+      silenceFrameCount++;
+    }
+  }
+
+  // Accumulate audio while speaking (or about to speak)
+  if (isSpeaking || speechFrameCount > 0) {
+    speechBuffer.push(new Float32Array(frame));
+  }
+
+  const now = Date.now();
+  const chunkDuration = now - chunkStartTime;
+  const silenceDuration = silenceFrameCount * VAD_FRAME_MS;
+
+  // Decide when to send a chunk
+  if (isSpeaking) {
+    // Send when: speech pause detected OR max duration reached
+    if (silenceDuration >= SILENCE_DURATION_MS && chunkDuration >= MIN_CHUNK_MS) {
+      // Speaker paused - send chunk now
+      flushSpeechBuffer();
+    } else if (chunkDuration >= MAX_CHUNK_MS) {
+      // Hit max duration - force send
+      flushSpeechBuffer();
+    }
+  }
+}
+
+// Flush the speech buffer and send to worker
+function flushSpeechBuffer() {
+  if (speechBuffer.length === 0) return;
+
+  // Concatenate all speech frames
+  const totalLength = speechBuffer.reduce((sum, buf) => sum + buf.length, 0);
+  const totalDurationMs = (totalLength / SAMPLE_RATE) * 1000;
+
+  // Skip if too short
+  if (totalDurationMs < MIN_SPEECH_MS) {
+    resetVADState();
+    return;
+  }
+
+  const combined = new Float32Array(totalLength);
+  let offset = 0;
+  for (const buf of speechBuffer) {
+    combined.set(buf, offset);
+    offset += buf.length;
+  }
+
+  console.log(
+    `[Offscreen] Sending ${Math.round(totalDurationMs)}ms of speech to Whisper`
+  );
+
+  sendToWorker(combined);
+  resetVADState();
+}
+
+// Send audio to worker (with queue if busy)
+function sendToWorker(audioData) {
+  if (!worker) return;
+
+  if (isWorkerBusy) {
+    // Worker is busy - queue this chunk (replace any previous pending)
+    pendingChunk = audioData;
+    return;
+  }
+
+  isWorkerBusy = true;
+  worker.postMessage(
+    {
+      type: 'transcribe',
+      audio: audioData.buffer,
+    },
+    [audioData.buffer]
+  );
+}
+
+// Reset VAD state for next utterance
+function resetVADState() {
+  speechBuffer = [];
+  silenceFrameCount = 0;
+  speechFrameCount = 0;
+  isSpeaking = false;
+  chunkStartTime = 0;
 }
 
 // Start capturing audio from the tab
@@ -116,7 +243,7 @@ async function startCapture(streamId) {
     const source = audioContext.createMediaStreamSource(mediaStream);
 
     // Use ScriptProcessorNode for capturing raw audio
-    // (AudioWorklet would be better but adds complexity for extensions)
+    // Buffer size matches VAD frame for low-latency processing
     const bufferSize = 4096;
     processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
 
@@ -124,78 +251,36 @@ async function startCapture(streamId) {
       if (!isCapturing) return;
 
       const channelData = e.inputBuffer.getChannelData(0);
-      // Copy the data (it gets reused)
-      audioBuffer.push(new Float32Array(channelData));
+      const data = new Float32Array(channelData);
+
+      // Process through VAD in frames
+      for (let i = 0; i < data.length; i += VAD_FRAME_SAMPLES) {
+        const end = Math.min(i + VAD_FRAME_SAMPLES, data.length);
+        const frame = data.slice(i, end);
+        if (frame.length >= VAD_FRAME_SAMPLES * 0.5) {
+          processVADFrame(frame);
+        }
+      }
     };
 
     source.connect(processor);
     processor.connect(audioContext.destination);
 
     isCapturing = true;
-    audioBuffer = [];
+    resetVADState();
 
-    // Process audio in regular intervals
-    processingTimer = setInterval(processAudioChunk, CHUNK_DURATION * 1000);
-
-    console.log('[Offscreen] Audio capture started');
+    console.log('[Offscreen] Audio capture started with VAD');
   } catch (error) {
     console.error('[Offscreen] Failed to start capture:', error);
   }
-}
-
-// Process accumulated audio buffer
-function processAudioChunk() {
-  if (!isCapturing || audioBuffer.length === 0 || !worker) return;
-
-  // Concatenate all buffered audio
-  const totalLength = audioBuffer.reduce((sum, buf) => sum + buf.length, 0);
-  const combined = new Float32Array(totalLength);
-  let offset = 0;
-  for (const buf of audioBuffer) {
-    combined.set(buf, offset);
-    offset += buf.length;
-  }
-
-  // Keep overlap for next chunk
-  const overlapSamples = Math.floor(CHUNK_OVERLAP * SAMPLE_RATE);
-  if (combined.length > overlapSamples) {
-    audioBuffer = [combined.slice(combined.length - overlapSamples)];
-  } else {
-    audioBuffer = [];
-  }
-
-  // Check if there's enough non-silent audio
-  const rms = calculateRMS(combined);
-  if (rms < SILENCE_THRESHOLD) {
-    return; // Skip silent chunks
-  }
-
-  const minSamples = MIN_AUDIO_DURATION * SAMPLE_RATE;
-  if (combined.length < minSamples) {
-    return; // Too short to transcribe
-  }
-
-  // Send to worker for transcription
-  worker.postMessage(
-    {
-      type: 'transcribe',
-      audio: combined.buffer,
-    },
-    [combined.buffer]
-  );
 }
 
 // Stop capturing
 function stopCapture() {
   isCapturing = false;
 
-  if (processingTimer) {
-    clearInterval(processingTimer);
-    processingTimer = null;
-  }
-
-  // Process any remaining audio
-  processAudioChunk();
+  // Flush any remaining speech
+  flushSpeechBuffer();
 
   if (processor) {
     processor.disconnect();
@@ -217,7 +302,9 @@ function stopCapture() {
     worker = null;
   }
 
-  audioBuffer = [];
+  resetVADState();
+  pendingChunk = null;
+  isWorkerBusy = false;
   console.log('[Offscreen] Audio capture stopped');
 }
 
