@@ -24,6 +24,39 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install conversion tools
+        run: pip install "optimum[onnxruntime]" sentencepiece
+
+      - name: Convert EN→HE translation model to ONNX
+        run: |
+          # Export model to ONNX format
+          optimum-cli export onnx \
+            --model Helsinki-NLP/opus-mt-en-he \
+            --task text2text-generation-with-past \
+            /tmp/opus-mt-en-he
+
+          # Create target directory with onnx/ subdirectory (transformers.js structure)
+          mkdir -p pwa/models/opus-mt-en-he/onnx
+
+          # Move ONNX files to onnx/ subdirectory
+          mv /tmp/opus-mt-en-he/*.onnx pwa/models/opus-mt-en-he/onnx/ 2>/dev/null || true
+          mv /tmp/opus-mt-en-he/*.onnx_data pwa/models/opus-mt-en-he/onnx/ 2>/dev/null || true
+
+          # Copy config and tokenizer files to model root
+          cp /tmp/opus-mt-en-he/*.json pwa/models/opus-mt-en-he/ 2>/dev/null || true
+          cp /tmp/opus-mt-en-he/*.spm pwa/models/opus-mt-en-he/ 2>/dev/null || true
+          cp /tmp/opus-mt-en-he/vocab.json pwa/models/opus-mt-en-he/ 2>/dev/null || true
+          cp /tmp/opus-mt-en-he/tokenizer.json pwa/models/opus-mt-en-he/ 2>/dev/null || true
+
+          # List output for debugging
+          echo "Model files:"
+          find pwa/models/ -type f -exec ls -lh {} \;
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
