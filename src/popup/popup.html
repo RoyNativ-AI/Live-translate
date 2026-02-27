@@ -293,7 +293,7 @@
 <body>
   <div class="header">
     <h1>Live Transcribe</h1>
-    <p>Real-time call transcription - 100% local</p>
+    <p>Ultra-low latency call transcription - 100% local</p>
   </div>
 
   <div class="content">
@@ -318,12 +318,17 @@
       <div class="setting-group">
         <label>Model</label>
         <select id="modelSelect">
-          <option value="onnx-community/whisper-tiny">Whisper Tiny (~75MB) - Fastest</option>
-          <option value="onnx-community/whisper-tiny.en">Whisper Tiny English (~75MB)</option>
-          <option value="onnx-community/whisper-base">Whisper Base (~150MB) - Balanced</option>
-          <option value="onnx-community/whisper-base.en">Whisper Base English (~150MB)</option>
-          <option value="onnx-community/whisper-small">Whisper Small (~466MB) - Best Quality</option>
-          <option value="onnx-community/whisper-small.en">Whisper Small English (~466MB)</option>
+          <optgroup label="Moonshine - Ultra Fast (English)">
+            <option value="onnx-community/moonshine-tiny-ONNX" selected>Moonshine Tiny (~40MB) - Fastest</option>
+            <option value="onnx-community/moonshine-base-ONNX">Moonshine Base (~80MB) - Best</option>
+          </optgroup>
+          <optgroup label="Whisper - Multilingual (inc. Hebrew)">
+            <option value="onnx-community/whisper-tiny">Whisper Tiny (~75MB)</option>
+            <option value="onnx-community/whisper-tiny.en">Whisper Tiny English (~75MB)</option>
+            <option value="onnx-community/whisper-base">Whisper Base (~150MB)</option>
+            <option value="onnx-community/whisper-base.en">Whisper Base English (~150MB)</option>
+            <option value="onnx-community/whisper-small">Whisper Small (~466MB) - Best Quality</option>
+          </optgroup>
         </select>
       </div>
 
@@ -390,7 +395,7 @@
   </div>
 
   <div class="footer">
-    Whisper AI runs 100% locally in your browser
+    100% local - no API keys, no servers, no data leaves your device
   </div>
 
   <script src="popup.js" type="module"></script>

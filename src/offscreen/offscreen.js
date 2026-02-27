@@ -6,10 +6,10 @@ const SAMPLE_RATE = 16000; // Whisper expects 16kHz audio
 const VAD_FRAME_MS = 30; // Analyze audio in 30ms frames
 const VAD_FRAME_SAMPLES = Math.floor(SAMPLE_RATE * VAD_FRAME_MS / 1000);
 const SPEECH_THRESHOLD = 0.015; // RMS threshold to detect speech
-const SILENCE_DURATION_MS = 600; // Send chunk after 600ms of silence (speech pause)
-const MIN_SPEECH_MS = 500; // Minimum speech duration to process
-const MAX_CHUNK_MS = 8000; // Force-send chunk after 8 seconds max
-const MIN_CHUNK_MS = 1000; // Minimum chunk duration to send
+const SILENCE_DURATION_MS = 400; // Send chunk after 400ms of silence (speech pause)
+const MIN_SPEECH_MS = 300; // Minimum speech duration to process
+const MAX_CHUNK_MS = 6000; // Force-send chunk after 6 seconds max
+const MIN_CHUNK_MS = 500; // Minimum chunk duration to send
 
 let mediaStream = null;
 let audioContext = null;
@@ -102,7 +102,7 @@ function initWorker() {
     (result) => {
       worker.postMessage({
         type: 'load',
-        model: result.model || 'onnx-community/whisper-tiny',
+        model: result.model || 'onnx-community/moonshine-tiny-ONNX',
         language: result.language || null,
         translate: result.translate || false,
         translateTarget: result.translateTarget || 'he',
