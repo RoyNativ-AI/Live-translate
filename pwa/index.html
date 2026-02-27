@@ -256,7 +256,8 @@
   <script type="module">
     import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.4.0';
 
-    env.allowLocalModels = false;
+    env.allowLocalModels = true;
+    env.localModelPath = './models/';
     env.useBrowserCache = true;
 
     // State
@@ -296,8 +297,10 @@
     const targetLang = document.getElementById('targetLang');
 
     // Translation models
+    // Hebrew model is self-hosted (converted via GitHub Actions)
+    // Other models use Xenova's pre-converted HuggingFace repos
     const TRANS_MODELS = {
-      he: 'Xenova/opus-mt-en-he',
+      he: 'opus-mt-en-he',
       ar: 'Xenova/opus-mt-en-ar',
       es: 'Xenova/opus-mt-en-es',
       fr: 'Xenova/opus-mt-en-fr',
