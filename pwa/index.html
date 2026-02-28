@@ -181,6 +181,11 @@
       margin-bottom: 4px;
     }
 
+    .line.interim .line-original {
+      color: #888;
+      font-style: italic;
+    }
+
     .line-translation {
       font-size: 20px;
       font-weight: 500;
@@ -300,6 +305,7 @@
     <div class="setting">
       <div class="setting-label">Model</div>
       <select id="modelSelect">
+        <option value="web-speech">Browser (Streaming)</option>
         <option value="onnx-community/moonshine-base-ONNX">Moonshine</option>
         <option value="onnx-community/whisper-tiny.en">Whisper Tiny</option>
         <option value="onnx-community/whisper-base.en">Whisper Base</option>
@@ -323,6 +329,8 @@
     let audioContext = null;
     let mediaStream = null;
     let processor = null;
+    let recognition = null;  // Web Speech API
+    let currentLineDiv = null;
 
     const SAMPLE_RATE = 16000;
     const VAD_FRAME_SAMPLES = 480;
@@ -438,11 +446,23 @@
     };
 
     async function downloadModel() {
+      const modelId = modelSelect.value;
+
+      // Web Speech API - no download needed
+      if (modelId === 'web-speech') {
+        if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+          setStatus('Browser not supported');
+          return;
+        }
+        modelReady = true;
+        setStatus('Tap to listen');
+        return;
+      }
+
       powerBtn.classList.add('loading');
       setStatus('Downloading...');
 
       try {
-        const modelId = modelSelect.value;
         let device = 'wasm';
         try {
           if (navigator.gpu) {
@@ -479,6 +499,14 @@
     }
 
     async function startListening() {
+      const modelId = modelSelect.value;
+
+      // Use Web Speech API
+      if (modelId === 'web-speech') {
+        startWebSpeech();
+        return;
+      }
+
       powerBtn.classList.add('loading');
       setStatus('Starting...');
 
@@ -521,15 +549,129 @@
       }
     }
 
+    function startWebSpeech() {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
+
+      recognition.onstart = () => {
+        isRunning = true;
+        modelSelect.disabled = true;
+        targetLang.disabled = true;
+        powerBtn.classList.remove('loading');
+        powerBtn.classList.add('active');
+        statusText.classList.add('active');
+        setStatus('Tap to stop');
+        transcript.classList.add('visible');
+      };
+
+      recognition.onresult = async (event) => {
+        let interimText = '';
+        let finalText = '';
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const result = event.results[i];
+          if (result.isFinal) {
+            finalText += result[0].transcript;
+          } else {
+            interimText += result[0].transcript;
+          }
+        }
+
+        // Show interim results
+        if (interimText) {
+          updateInterimLine(interimText);
+        }
+
+        // Finalize and translate
+        if (finalText) {
+          await finalizeLine(finalText.trim());
+        }
+      };
+
+      recognition.onerror = (event) => {
+        console.error('Speech error:', event.error);
+        if (event.error !== 'no-speech') {
+          setStatus(event.error);
+        }
+      };
+
+      recognition.onend = () => {
+        // Restart if still running
+        if (isRunning) {
+          recognition.start();
+        }
+      };
+
+      recognition.start();
+    }
+
+    function updateInterimLine(text) {
+      if (!currentLineDiv) {
+        currentLineDiv = document.createElement('div');
+        currentLineDiv.className = 'line interim';
+        currentLineDiv.innerHTML = `
+          <div class="line-original"></div>
+          <div class="line-translation" style="color:#555">...</div>
+        `;
+        transcript.appendChild(currentLineDiv);
+      }
+      currentLineDiv.querySelector('.line-original').textContent = text;
+      transcript.scrollTop = transcript.scrollHeight;
+    }
+
+    async function finalizeLine(text) {
+      if (!text) return;
+
+      if (currentLineDiv) {
+        currentLineDiv.classList.remove('interim');
+        currentLineDiv.querySelector('.line-original').textContent = text;
+      } else {
+        currentLineDiv = document.createElement('div');
+        currentLineDiv.className = 'line';
+        currentLineDiv.innerHTML = `
+          <div class="line-original">${escapeHtml(text)}</div>
+          <div class="line-translation" style="color:#333">...</div>
+        `;
+        transcript.appendChild(currentLineDiv);
+      }
+
+      // Translate
+      const lang = targetLang.value;
+      if (lang && lang !== 'en') {
+        const translated = await translateText(text, lang);
+        if (translated && currentLineDiv) {
+          const transDiv = currentLineDiv.querySelector('.line-translation');
+          if (transDiv) {
+            transDiv.textContent = translated;
+            transDiv.style.color = '#fff';
+          }
+        }
+      }
+
+      transcript.scrollTop = transcript.scrollHeight;
+      currentLineDiv = null;
+    }
+
     function stop() {
       isRunning = false;
-      flushBuffer();
 
+      // Stop Web Speech
+      if (recognition) {
+        recognition.stop();
+        recognition = null;
+      }
+
+      // Stop Whisper/Moonshine
+      flushBuffer();
       if (processor) { processor.disconnect(); processor = null; }
       if (audioContext) { audioContext.close(); audioContext = null; }
       if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
 
       resetVAD();
+      currentLineDiv = null;
       modelSelect.disabled = false;
       targetLang.disabled = false;
 
