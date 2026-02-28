@@ -181,11 +181,6 @@
       margin-bottom: 4px;
     }
 
-    .line.interim .line-original {
-      color: #888;
-      font-style: italic;
-    }
-
     .line-translation {
       font-size: 20px;
       font-weight: 500;
@@ -328,19 +323,19 @@
 
     const SAMPLE_RATE = 16000;
     const VAD_FRAME_SAMPLES = 480;
-    const SPEECH_THRESHOLD = 0.001;
-    const SILENCE_MS = 400;
-    const MIN_SPEECH_MS = 100;
-    const MAX_CHUNK_MS = 5000;
-    const INTERIM_MS = 500;  // Stream interim results every 500ms
+    const SPEECH_THRESHOLD = 0.001;  // Very sensitive
+    const SILENCE_MS = 200;          // Very fast cutoff
+    const MIN_SPEECH_MS = 150;       // Minimum speech
+    const MAX_CHUNK_MS = 3000;       // 3 sec max chunks
+    const MIN_CHUNK_MS = 200;        // Ultra fast response
 
     let speechBuffer = [];
     let silenceFrames = 0;
     let speechFrames = 0;
     let isSpeaking = false;
     let chunkStart = 0;
-    let lastInterimTime = 0;
-    let currentLineDiv = null;
+    let workerBusy = false;
+    let pendingAudio = null;
     let modelReady = false;
 
     const powerBtn = document.getElementById('powerBtn');
@@ -574,31 +569,10 @@
 
       const elapsed = Date.now() - chunkStart;
       const silenceMs = silenceFrames * 30;
-      const now = Date.now();
 
-      // Send interim results while speaking
-      if (isSpeaking && (now - lastInterimTime >= INTERIM_MS) && speechBuffer.length > 0) {
-        lastInterimTime = now;
-        sendInterim();
+      if (isSpeaking && ((silenceMs >= SILENCE_MS && elapsed >= MIN_CHUNK_MS) || elapsed >= MAX_CHUNK_MS)) {
+        flushBuffer();
       }
-
-      // Final flush on silence or max time
-      if (isSpeaking && (silenceMs >= SILENCE_MS || elapsed >= MAX_CHUNK_MS)) {
-        flushBuffer(true);
-      }
-    }
-
-    async function sendInterim() {
-      if (speechBuffer.length === 0) return;
-      const total = speechBuffer.reduce((s, b) => s + b.length, 0);
-      if ((total / SAMPLE_RATE) * 1000 < MIN_SPEECH_MS) return;
-
-      const combined = new Float32Array(total);
-      let off = 0;
-      for (const b of speechBuffer) { combined.set(b, off); off += b.length; }
-
-      // Run inference without blocking
-      runInference(combined, true);
     }
 
     function resetVAD() {
@@ -607,11 +581,9 @@
       speechFrames = 0;
       isSpeaking = false;
       chunkStart = 0;
-      lastInterimTime = 0;
-      currentLineDiv = null;
     }
 
-    function flushBuffer(isFinal = false) {
+    function flushBuffer() {
       if (speechBuffer.length === 0) return;
       const total = speechBuffer.reduce((s, b) => s + b.length, 0);
       if ((total / SAMPLE_RATE) * 1000 < MIN_SPEECH_MS) { resetVAD(); return; }
@@ -620,74 +592,61 @@
       let off = 0;
       for (const b of speechBuffer) { combined.set(b, off); off += b.length; }
 
-      runInference(combined, false);
+      if (workerBusy) { pendingAudio = combined; }
+      else { runInference(combined); }
       resetVAD();
     }
 
-    async function runInference(audio, isInterim) {
+    async function runInference(audio) {
       if (!transcriber) return;
+      workerBusy = true;
 
       try {
         const result = await transcriber(audio, { return_timestamps: false });
         if (result && result.text && result.text.trim()) {
           const text = result.text.trim();
+          addLine(text);
 
-          if (isInterim) {
-            // Update or create interim line
-            updateInterimLine(text);
-          } else {
-            // Finalize line
-            finalizeLine(text);
+          const lang = targetLang.value;
+          if (lang && lang !== 'en') {
+            const translated = await translateText(text, lang);
+            if (translated) updateLastTranslation(translated);
           }
         }
       } catch (err) {
         console.error('Inference error:', err);
+      } finally {
+        workerBusy = false;
+      }
+
+      if (pendingAudio) {
+        const next = pendingAudio;
+        pendingAudio = null;
+        runInference(next);
       }
     }
 
-    function updateInterimLine(text) {
-      if (!currentLineDiv) {
-        currentLineDiv = document.createElement('div');
-        currentLineDiv.className = 'line interim';
-        currentLineDiv.innerHTML = `
-          <div class="line-original"></div>
-          <div class="line-translation" style="color:#555">...</div>
-        `;
-        transcript.appendChild(currentLineDiv);
-      }
-      currentLineDiv.querySelector('.line-original').textContent = text;
+    function addLine(original) {
+      const div = document.createElement('div');
+      div.className = 'line';
+      div.innerHTML = `
+        <div class="line-original">${escapeHtml(original)}</div>
+        <div class="line-translation" style="color:#333">...</div>
+      `;
+      transcript.appendChild(div);
       transcript.scrollTop = transcript.scrollHeight;
     }
 
-    async function finalizeLine(text) {
-      if (currentLineDiv) {
-        currentLineDiv.classList.remove('interim');
-        currentLineDiv.querySelector('.line-original').textContent = text;
-      } else {
-        currentLineDiv = document.createElement('div');
-        currentLineDiv.className = 'line';
-        currentLineDiv.innerHTML = `
-          <div class="line-original">${escapeHtml(text)}</div>
-          <div class="line-translation" style="color:#333">...</div>
-        `;
-        transcript.appendChild(currentLineDiv);
+    function updateLastTranslation(translation) {
+      const lines = transcript.querySelectorAll('.line');
+      if (lines.length === 0) return;
+      const last = lines[lines.length - 1];
+      const transDiv = last.querySelector('.line-translation');
+      if (transDiv) {
+        transDiv.textContent = translation;
+        transDiv.style.color = '#fff';
       }
-
-      // Translate
-      const lang = targetLang.value;
-      if (lang && lang !== 'en') {
-        const translated = await translateText(text, lang);
-        if (translated && currentLineDiv) {
-          const transDiv = currentLineDiv.querySelector('.line-translation');
-          if (transDiv) {
-            transDiv.textContent = translated;
-            transDiv.style.color = '#fff';
-          }
-        }
-      }
-
       transcript.scrollTop = transcript.scrollHeight;
-      currentLineDiv = null;
     }
 
     function escapeHtml(s) {
