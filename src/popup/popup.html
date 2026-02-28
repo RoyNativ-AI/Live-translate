@@ -316,23 +316,6 @@
 
     <div class="settings">
       <div class="setting-group">
-        <label>Model</label>
-        <select id="modelSelect">
-          <optgroup label="Moonshine - Ultra Fast (English)">
-            <option value="onnx-community/moonshine-tiny-ONNX" selected>Moonshine Tiny (~40MB) - Fastest</option>
-            <option value="onnx-community/moonshine-base-ONNX">Moonshine Base (~80MB) - Best</option>
-          </optgroup>
-          <optgroup label="Whisper - Multilingual (inc. Hebrew)">
-            <option value="onnx-community/whisper-tiny">Whisper Tiny (~75MB)</option>
-            <option value="onnx-community/whisper-tiny.en">Whisper Tiny English (~75MB)</option>
-            <option value="onnx-community/whisper-base">Whisper Base (~150MB)</option>
-            <option value="onnx-community/whisper-base.en">Whisper Base English (~150MB)</option>
-            <option value="onnx-community/whisper-small">Whisper Small (~466MB) - Best Quality</option>
-          </optgroup>
-        </select>
-      </div>
-
-      <div class="setting-group">
         <label>Speech Language</label>
         <select id="langSelect">
           <option value="en" selected>English</option>
@@ -362,7 +345,13 @@
           </label>
         </div>
         <div class="translate-settings visible" id="translateSettings">
-          <label>Translate To</label>
+          <label>Translation Speed</label>
+          <select id="translationMethod">
+            <option value="cloud" selected>Fast (Cloud) - Google Translate</option>
+            <option value="local">Local (Private) - OPUS-MT</option>
+          </select>
+
+          <label style="margin-top: 8px">Translate To</label>
           <select id="translateTarget">
             <option value="he" selected>Hebrew / עברית</option>
             <option value="ar">Arabic / العربية</option>

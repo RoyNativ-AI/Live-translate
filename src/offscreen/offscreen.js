@@ -98,7 +98,7 @@ function initWorker() {
 
   // Load the model with settings
   chrome.storage.local.get(
-    ['model', 'language', 'translate', 'translateTarget'],
+    ['model', 'language', 'translate', 'translateTarget', 'translationMethod'],
     (result) => {
       worker.postMessage({
         type: 'load',
@@ -106,6 +106,7 @@ function initWorker() {
         language: result.language || null,
         translate: result.translate || false,
         translateTarget: result.translateTarget || 'he',
+        translationMethod: result.translationMethod || 'cloud',
       });
     }
   );

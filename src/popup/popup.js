@@ -5,35 +5,36 @@ const statusDot = document.getElementById('statusDot');
 const statusText = document.getElementById('statusText');
 const progressBar = document.getElementById('progressBar');
 const progressFill = document.getElementById('progressFill');
-const modelSelect = document.getElementById('modelSelect');
 const langSelect = document.getElementById('langSelect');
 const translateToggle = document.getElementById('translateToggle');
 const translateTargetSelect = document.getElementById('translateTarget');
 const translateSettings = document.getElementById('translateSettings');
+const translationMethodSelect = document.getElementById('translationMethod');
 
 let isTranscribing = false;
 
 // Load saved settings
 chrome.storage.local.get(
-  ['model', 'language', 'translate', 'translateTarget'],
+  ['language', 'translate', 'translateTarget', 'translationMethod'],
   (result) => {
-    if (result.model) modelSelect.value = result.model;
     if (result.language !== undefined) langSelect.value = result.language;
     if (result.translate !== undefined)
       translateToggle.checked = result.translate;
     if (result.translateTarget)
       translateTargetSelect.value = result.translateTarget;
+    if (result.translationMethod)
+      translationMethodSelect.value = result.translationMethod;
     updateTranslateVisibility();
   }
 );
 
 // Save settings on change
-modelSelect.addEventListener('change', () => {
-  chrome.storage.local.set({ model: modelSelect.value });
-});
-
 langSelect.addEventListener('change', () => {
   chrome.storage.local.set({ language: langSelect.value });
+});
+
+translationMethodSelect.addEventListener('change', () => {
+  chrome.storage.local.set({ translationMethod: translationMethodSelect.value });
 });
 
 translateToggle.addEventListener('change', () => {
@@ -91,10 +92,10 @@ async function startTranscription() {
 
     // Save current settings before starting
     chrome.storage.local.set({
-      model: modelSelect.value,
       language: langSelect.value,
       translate: translateToggle.checked,
       translateTarget: translateTargetSelect.value,
+      translationMethod: translationMethodSelect.value,
     });
 
     // Send start message to background
@@ -144,10 +145,10 @@ function setActiveState() {
     Stop Transcription
   `;
   setStatus('active', 'Transcribing...');
-  modelSelect.disabled = true;
   langSelect.disabled = true;
   translateToggle.disabled = true;
   translateTargetSelect.disabled = true;
+  translationMethodSelect.disabled = true;
 }
 
 function setIdleState() {
@@ -163,10 +164,10 @@ function setIdleState() {
   `;
   setStatus('idle', 'Ready');
   progressBar.classList.remove('visible');
-  modelSelect.disabled = false;
   langSelect.disabled = false;
   translateToggle.disabled = false;
   translateTargetSelect.disabled = false;
+  translationMethodSelect.disabled = false;
 }
 
 function setStatus(state, text) {

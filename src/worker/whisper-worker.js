@@ -14,6 +14,54 @@ let modelId = 'onnx-community/moonshine-tiny-ONNX';
 let language = null; // null = auto-detect
 let translateEnabled = false;
 let translateTarget = 'he'; // Default: translate to Hebrew
+let translationMethod = 'cloud'; // 'cloud' (fast, Google Translate) or 'local' (private, OPUS-MT)
+
+// Translation cache (LRU, max 200 entries)
+const translationCache = new Map();
+const MAX_CACHE_SIZE = 200;
+
+function getCachedTranslation(text) {
+  const key = `${text}::${translateTarget}`;
+  if (translationCache.has(key)) {
+    const value = translationCache.get(key);
+    // Move to end (most recently used)
+    translationCache.delete(key);
+    translationCache.set(key, value);
+    return value;
+  }
+  return null;
+}
+
+function setCachedTranslation(text, translation) {
+  const key = `${text}::${translateTarget}`;
+  if (translationCache.size >= MAX_CACHE_SIZE) {
+    // Delete oldest entry
+    const firstKey = translationCache.keys().next().value;
+    translationCache.delete(firstKey);
+  }
+  translationCache.set(key, translation);
+}
+
+// Cloud translation using Google Translate API (fast, no model loading)
+async function cloudTranslate(text, sourceLang, targetLang) {
+  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${encodeURIComponent(sourceLang)}&tl=${encodeURIComponent(targetLang)}&dt=t&q=${encodeURIComponent(text)}`;
+
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Translation API error: ${response.status}`);
+
+  const data = await response.json();
+
+  // Google Translate returns nested arrays: [[["translated","original",...],...],...,"en"]
+  if (data && data[0]) {
+    let translated = '';
+    for (const segment of data[0]) {
+      if (segment[0]) translated += segment[0];
+    }
+    return translated;
+  }
+
+  throw new Error('Invalid translation response');
+}
 
 // Models that support language parameter (Whisper family)
 const WHISPER_MODELS = new Set([
@@ -96,6 +144,7 @@ async function loadModel(settings) {
   language = settings.language || null;
   translateEnabled = settings.translate || false;
   translateTarget = settings.translateTarget || 'he';
+  translationMethod = settings.translationMethod || 'cloud';
 
   self.postMessage({
     type: 'progress',
@@ -122,9 +171,11 @@ async function loadModel(settings) {
 
     console.log('[Worker] ASR model loaded');
 
-    // Load translation model if enabled
-    if (translateEnabled) {
+    // Load translation model if enabled and using local method
+    if (translateEnabled && translationMethod === 'local') {
       await loadTranslationModel();
+    } else if (translateEnabled && translationMethod === 'cloud') {
+      console.log('[Worker] Using cloud translation (Google Translate) - no model to load');
     }
 
     isLoading = false;
@@ -171,12 +222,14 @@ async function loadTranslationModel() {
   });
 
   try {
+    const transDevice = await detectDevice();
+    console.log(`[Worker] Translation model using device: ${transDevice}`);
     translator = await pipeline(
       'translation',
       translationModelId,
       {
-        device: 'wasm',
-        dtype: 'q8',
+        device: transDevice,
+        dtype: transDevice === 'webgpu' ? 'fp32' : 'q8',
         progress_callback: makeProgressCallback('translation'),
       }
     );
@@ -240,33 +293,74 @@ async function transcribe(audioBuffer) {
     });
 
     // Translate if enabled
-    if (translateEnabled && translator && originalText) {
-      try {
-        const transStart = performance.now();
-        const translation = await translator(originalText, {
-          max_length: 512,
+    if (translateEnabled && originalText) {
+      // Check cache first
+      const cached = getCachedTranslation(originalText);
+      if (cached) {
+        console.log('[Worker] Translation cache hit');
+        self.postMessage({
+          type: 'result',
+          text: originalText,
+          translatedText: cached,
+          language: result.language || language || 'en',
+          isTranslated: true,
+          inferenceMs,
         });
+      } else if (translationMethod === 'cloud') {
+        // Cloud translation (Google Translate) - fast, no local model needed
+        try {
+          const transStart = performance.now();
+          const sourceLang = result.language || language || 'en';
+          const translatedText = await cloudTranslate(originalText, sourceLang, translateTarget);
+          const transMs = Math.round(performance.now() - transStart);
 
-        const translatedText =
-          translation && translation[0]
-            ? translation[0].translation_text
-            : null;
-
-        const transMs = Math.round(performance.now() - transStart);
-
-        if (translatedText && translatedText.trim()) {
-          console.log(`[Worker] Translated in ${transMs}ms`);
-          self.postMessage({
-            type: 'result',
-            text: originalText,
-            translatedText: translatedText.trim(),
-            language: result.language || language || 'en',
-            isTranslated: true,
-            inferenceMs: inferenceMs + transMs,
-          });
+          if (translatedText && translatedText.trim()) {
+            const trimmed = translatedText.trim();
+            setCachedTranslation(originalText, trimmed);
+            console.log(`[Worker] Cloud translated in ${transMs}ms`);
+            self.postMessage({
+              type: 'result',
+              text: originalText,
+              translatedText: trimmed,
+              language: sourceLang,
+              isTranslated: true,
+              inferenceMs: inferenceMs + transMs,
+            });
+          }
+        } catch (transError) {
+          console.error('[Worker] Cloud translation error:', transError);
         }
-      } catch (transError) {
-        console.error('[Worker] Translation error:', transError);
+      } else if (translator) {
+        // Local translation (OPUS-MT) - private, no network needed
+        try {
+          const transStart = performance.now();
+          const translation = await translator(originalText, {
+            max_length: 200,
+          });
+
+          const translatedText =
+            translation && translation[0]
+              ? translation[0].translation_text
+              : null;
+
+          const transMs = Math.round(performance.now() - transStart);
+
+          if (translatedText && translatedText.trim()) {
+            const trimmed = translatedText.trim();
+            setCachedTranslation(originalText, trimmed);
+            console.log(`[Worker] Local translated in ${transMs}ms`);
+            self.postMessage({
+              type: 'result',
+              text: originalText,
+              translatedText: trimmed,
+              language: result.language || language || 'en',
+              isTranslated: true,
+              inferenceMs: inferenceMs + transMs,
+            });
+          }
+        } catch (transError) {
+          console.error('[Worker] Local translation error:', transError);
+        }
       }
     }
   } catch (error) {
