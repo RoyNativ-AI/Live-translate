@@ -412,10 +412,6 @@ async function transcribe(audioBuffer) {
 
   try {
     const audioData = new Float32Array(audioBuffer);
-
-    // Run speaker diarization before transcription
-    const speaker = await runDiarization(audioData);
-
     const startTime = performance.now();
 
     // Build options based on model type
@@ -433,7 +429,11 @@ async function transcribe(audioBuffer) {
     }
     // Moonshine doesn't need chunk_length_s — it handles variable-length audio natively
 
-    const result = await transcriber(audioData, options);
+    // Run diarization and transcription in parallel — diarization doesn't block ASR
+    const [speaker, result] = await Promise.all([
+      runDiarization(audioData),
+      transcriber(audioData, options),
+    ]);
     const inferenceMs = Math.round(performance.now() - startTime);
 
     if (!result || !result.text || !result.text.trim()) return;
