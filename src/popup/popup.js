@@ -188,7 +188,9 @@ chrome.runtime.onMessage.addListener((message) => {
         progressBar.classList.add('visible');
         progressFill.style.width = `${progress}%`;
         const phaseLabel =
-          phase === 'translation' ? 'translation' : 'transcription';
+          phase === 'translation' ? 'translation'
+          : phase === 'diarization' ? 'speaker detection'
+          : 'transcription';
         setStatus(
           'loading',
           `Downloading ${phaseLabel} model... ${Math.round(progress)}%`
@@ -199,7 +201,9 @@ chrome.runtime.onMessage.addListener((message) => {
       case 'loading': {
         progressBar.classList.add('visible');
         const loadLabel =
-          phase === 'translation' ? 'translation' : 'transcription';
+          phase === 'translation' ? 'translation'
+          : phase === 'diarization' ? 'speaker detection'
+          : 'transcription';
         setStatus('loading', `Loading ${loadLabel} model...`);
         break;
       }

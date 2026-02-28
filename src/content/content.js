@@ -119,7 +119,7 @@
     }
   }
 
-  function addTranscriptionLine(text, isFinal, translatedText, isTranslated) {
+  function addTranscriptionLine(text, isFinal, translatedText, isTranslated, speaker) {
     if (!container) return;
 
     // Remove empty state message
@@ -156,6 +156,14 @@
     // Create new line element
     const lineEl = document.createElement('div');
     lineEl.className = 'lt-line' + (isFinal ? ' lt-final' : ' lt-partial');
+
+    // Speaker badge
+    if (speaker) {
+      const speakerEl = document.createElement('span');
+      speakerEl.className = `lt-speaker lt-speaker-${speaker}`;
+      speakerEl.textContent = `Speaker ${speaker}`;
+      lineEl.appendChild(speakerEl);
+    }
 
     // Original text
     const originalEl = document.createElement('div');
@@ -218,7 +226,8 @@
         message.text,
         message.isFinal,
         message.translatedText,
-        message.isTranslated
+        message.isTranslated,
+        message.speaker
       );
     }
   });

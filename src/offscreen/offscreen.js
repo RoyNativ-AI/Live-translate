@@ -62,6 +62,7 @@ function initWorker() {
             isTranslated: data.isTranslated || false,
             isFinal: true,
             language: data.language,
+            speaker: data.speaker || null,
           });
         }
         // Process pending chunk if any

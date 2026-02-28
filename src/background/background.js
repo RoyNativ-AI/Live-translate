@@ -151,6 +151,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       isTranslated: message.isTranslated || false,
       isFinal: message.isFinal,
       language: message.language,
+      speaker: message.speaker || null,
     });
   }
 

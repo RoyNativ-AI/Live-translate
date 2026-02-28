@@ -1,7 +1,7 @@
 // Web Worker - runs ASR model inference + translation off the main thread
 // Supports Moonshine (ultra-low latency) and Whisper (multilingual) via Transformers.js
 
-import { pipeline, env } from '@huggingface/transformers';
+import { pipeline, AutoModelForAudioFrameClassification, Tensor, env } from '@huggingface/transformers';
 
 // Configure Transformers.js for extension environment
 env.allowLocalModels = false;
@@ -15,6 +15,23 @@ let language = null; // null = auto-detect
 let translateEnabled = false;
 let translateTarget = 'he'; // Default: translate to Hebrew
 let translationMethod = 'cloud'; // 'cloud' (fast, Google Translate) or 'local' (private, OPUS-MT)
+
+// Speaker diarization
+let segmentationModel = null;
+const SEGMENT_SAMPLES = 160000; // 10 seconds at 16kHz
+let audioHistory = [];
+let historyTotalLength = 0;
+
+// Powerset labels for pyannote-segmentation-3.0 (max 3 speakers)
+const POWERSET_LABELS = [
+  [],      // 0: no speech
+  [1],     // 1: speaker 1 only
+  [2],     // 2: speaker 2 only
+  [3],     // 3: speaker 3 only
+  [1, 2],  // 4: speakers 1 & 2
+  [1, 3],  // 5: speakers 1 & 3
+  [2, 3],  // 6: speakers 2 & 3
+];
 
 // Translation cache (LRU, max 200 entries)
 const translationCache = new Map();
@@ -135,6 +152,142 @@ function isWhisperModel(id) {
   return WHISPER_MODELS.has(id);
 }
 
+// Add audio to sliding window buffer for consistent speaker labels
+function addToAudioHistory(audio) {
+  audioHistory.push(new Float32Array(audio));
+  historyTotalLength += audio.length;
+
+  // Keep only last 10 seconds
+  while (audioHistory.length > 1 && historyTotalLength - audioHistory[0].length >= SEGMENT_SAMPLES) {
+    historyTotalLength -= audioHistory[0].length;
+    audioHistory.shift();
+  }
+}
+
+// Build a 10-second audio window from history (right-justified, zero-padded)
+function getAudioWindow() {
+  const result = new Float32Array(SEGMENT_SAMPLES);
+  const totalLen = Math.min(historyTotalLength, SEGMENT_SAMPLES);
+  const offset = SEGMENT_SAMPLES - totalLen;
+
+  let skipSamples = Math.max(0, historyTotalLength - SEGMENT_SAMPLES);
+  let writePos = offset;
+
+  for (const chunk of audioHistory) {
+    if (skipSamples >= chunk.length) {
+      skipSamples -= chunk.length;
+      continue;
+    }
+    const startIdx = skipSamples;
+    skipSamples = 0;
+    const copyLen = Math.min(chunk.length - startIdx, SEGMENT_SAMPLES - writePos);
+    result.set(chunk.subarray(startIdx, startIdx + copyLen), writePos);
+    writePos += copyLen;
+  }
+
+  return result;
+}
+
+// Load the speaker segmentation model
+async function loadSegmentationModel() {
+  try {
+    self.postMessage({
+      type: 'progress',
+      status: 'loading',
+      phase: 'diarization',
+      progress: 0,
+    });
+
+    const device = await detectDevice();
+    segmentationModel = await AutoModelForAudioFrameClassification.from_pretrained(
+      'onnx-community/pyannote-segmentation-3.0',
+      {
+        device,
+        dtype: device === 'webgpu' ? 'fp32' : 'q8',
+        progress_callback: makeProgressCallback('diarization'),
+      }
+    );
+
+    console.log('[Worker] Speaker diarization model loaded');
+  } catch (error) {
+    console.warn('[Worker] Failed to load diarization model:', error);
+    segmentationModel = null;
+  }
+}
+
+// Run speaker diarization on an audio chunk using a sliding window
+async function runDiarization(audioData) {
+  if (!segmentationModel) return null;
+
+  try {
+    // Add chunk to sliding window for cross-chunk label consistency
+    addToAudioHistory(audioData);
+    const audioWindow = getAudioWindow();
+
+    // Create input tensor [batch=1, samples=160000]
+    const input = new Tensor('float32', audioWindow, [1, SEGMENT_SAMPLES]);
+    const output = await segmentationModel({ input_values: input });
+
+    const logits = output.logits;
+    const numFrames = logits.dims[1];
+    const numClasses = logits.dims[2];
+
+    // Current chunk occupies the last audioData.length samples of the window
+    const chunkStartSample = SEGMENT_SAMPLES - audioData.length;
+    const startFrame = Math.max(0, Math.floor(chunkStartSample * numFrames / SEGMENT_SAMPLES));
+    const endFrame = numFrames;
+
+    // Count how many frames each speaker is active
+    const speakerCounts = [0, 0, 0]; // speakers 1, 2, 3
+
+    if (numClasses === 7) {
+      // Powerset approach (pyannote-segmentation-3.0)
+      for (let f = startFrame; f < endFrame; f++) {
+        let maxLogit = -Infinity;
+        let maxClass = 0;
+        for (let c = 0; c < numClasses; c++) {
+          const val = logits.data[f * numClasses + c];
+          if (val > maxLogit) {
+            maxLogit = val;
+            maxClass = c;
+          }
+        }
+        const speakers = POWERSET_LABELS[maxClass];
+        for (const spk of speakers) {
+          speakerCounts[spk - 1]++;
+        }
+      }
+    } else {
+      // Multi-label fallback (sigmoid per speaker)
+      for (let f = startFrame; f < endFrame; f++) {
+        for (let c = 0; c < Math.min(numClasses, 3); c++) {
+          if (logits.data[f * numClasses + c] > 0) {
+            speakerCounts[c]++;
+          }
+        }
+      }
+    }
+
+    // Find dominant speaker
+    let dominantSpeaker = 0;
+    let maxCount = 0;
+    for (let i = 0; i < 3; i++) {
+      if (speakerCounts[i] > maxCount) {
+        maxCount = speakerCounts[i];
+        dominantSpeaker = i + 1;
+      }
+    }
+
+    if (maxCount === 0) return null;
+
+    console.log(`[Worker] Diarization: Speaker ${dominantSpeaker} (counts: ${speakerCounts.join(', ')})`);
+    return dominantSpeaker;
+  } catch (error) {
+    console.warn('[Worker] Diarization error:', error);
+    return null;
+  }
+}
+
 // Load the ASR model (Moonshine or Whisper) and optionally translation model
 async function loadModel(settings) {
   if (isLoading) return;
@@ -170,6 +323,9 @@ async function loadModel(settings) {
     );
 
     console.log('[Worker] ASR model loaded');
+
+    // Load speaker diarization model
+    await loadSegmentationModel();
 
     // Load translation model if enabled and using local method
     if (translateEnabled && translationMethod === 'local') {
@@ -256,6 +412,10 @@ async function transcribe(audioBuffer) {
 
   try {
     const audioData = new Float32Array(audioBuffer);
+
+    // Run speaker diarization before transcription
+    const speaker = await runDiarization(audioData);
+
     const startTime = performance.now();
 
     // Build options based on model type
@@ -290,6 +450,7 @@ async function transcribe(audioBuffer) {
       language: result.language || language || 'en',
       isTranslated: false,
       inferenceMs,
+      speaker,
     });
 
     // Translate if enabled
@@ -305,6 +466,7 @@ async function transcribe(audioBuffer) {
           language: result.language || language || 'en',
           isTranslated: true,
           inferenceMs,
+          speaker,
         });
       } else if (translationMethod === 'cloud') {
         // Cloud translation (Google Translate) - fast, no local model needed
@@ -325,6 +487,7 @@ async function transcribe(audioBuffer) {
               language: sourceLang,
               isTranslated: true,
               inferenceMs: inferenceMs + transMs,
+              speaker,
             });
           }
         } catch (transError) {
@@ -356,6 +519,7 @@ async function transcribe(audioBuffer) {
               language: result.language || language || 'en',
               isTranslated: true,
               inferenceMs: inferenceMs + transMs,
+              speaker,
             });
           }
         } catch (transError) {
