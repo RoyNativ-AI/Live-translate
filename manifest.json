@@ -14,7 +14,8 @@
     "https://*.zoom.us/*",
     "https://web.whatsapp.com/*",
     "https://*.webex.com/*",
-    "https://teams.microsoft.com/*"
+    "https://teams.microsoft.com/*",
+    "https://translate.googleapis.com/*"
   ],
   "background": {
     "service_worker": "background.js",
