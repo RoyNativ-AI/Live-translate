@@ -1,0 +1,24 @@
+# Core
+fastapi>=0.100.0
+uvicorn>=0.23.0
+websockets>=11.0
+
+# Audio processing
+numpy>=1.24.0
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# Speaker diarization
+pyannote.audio>=3.0.0
+diart>=0.8.0
+
+# Whisper transcription
+whisperlivekit>=0.1.0
+openai-whisper>=20230918
+
+# Hugging Face
+huggingface_hub>=0.16.0
+transformers>=4.30.0
+
+# Utilities
+python-dotenv>=1.0.0
